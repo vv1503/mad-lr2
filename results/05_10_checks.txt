@@ -1,0 +1,11 @@
+p5_model_built: True
+p6_resid_plot: True
+p6_mean_near_zero: True
+p7_std_resid_hist: True
+p8_equation: True
+p9_r2_present: True
+p10_f_pvalue: True
+p10_model_sig_flag: True
+
+ŷ = 757.301238 - 74.857212*bedrooms + 0.955403*square_feet - 59.537031*pets_yes
+R2=0.152162

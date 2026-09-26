@@ -1,0 +1,5 @@
+p11_model: True
+p6_plot: True
+p8_equation: True
+p9_r2: True
+p10_sig: True
