@@ -21,6 +21,7 @@ import seaborn as sns
 import statsmodels.api as sm
 from scipy import stats
 from statsmodels.stats.diagnostic import het_breuschpagan
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -72,30 +73,81 @@ def load_data() -> pd.DataFrame:
 def points_1_to_3(df: pd.DataFrame) -> None:
     print("\n=== П.1–3 ===")
     n = len(df)
-    desc = df[["price", "bedrooms", "square_feet"]].describe().T
-    desc["skew"] = df[["price", "bedrooms", "square_feet"]].skew()
-    desc["kurtosis"] = df[["price", "bedrooms", "square_feet"]].kurtosis()
+    cols = ["price", "bedrooms", "square_feet"]
+    desc = df[cols].describe().T
+    desc["skew"] = df[cols].skew()
+    desc["kurtosis"] = df[cols].kurtosis()
     desc.to_csv(RES / "01_03_descriptive.csv", encoding="utf-8-sig")
+
+    norm_rows = []
+    for col in cols:
+        x = df[col].astype(float).to_numpy()
+        jb, jp = stats.jarque_bera(x)
+        norm_rows.append(
+            {
+                "variable": col,
+                "skew": float(stats.skew(x)),
+                "kurtosis_excess": float(stats.kurtosis(x)),
+                "jarque_bera": float(jb),
+                "p_value": float(jp),
+                "normal_at_alpha": bool(jp >= ALPHA),
+            }
+        )
+    pd.DataFrame(norm_rows).to_csv(RES / "01_03_normality.csv", index=False, encoding="utf-8-sig")
+
+    n_no = int((df["pets_yes"] == 0).sum())
+    n_yes = int((df["pets_yes"] == 1).sum())
+    pd.DataFrame(
+        {
+            "pets_yes": [0, 1],
+            "count": [n_no, n_yes],
+            "share": [n_no / n, n_yes / n],
+        }
+    ).to_csv(RES / "01_03_pets.csv", index=False, encoding="utf-8-sig")
+
+    k_formula = 1 + 3.322 * math.log10(n)
+    k_price, h_price = sturges_bins(df["price"])
+    k_sq, h_sq = sturges_bins(df["square_feet"])
+    k_bed, h_bed = sturges_bins(df["bedrooms"])
+    n_bed = int(df["bedrooms"].nunique())
+    bed_min = float(df["bedrooms"].min())
+    bed_max = float(df["bedrooms"].max())
+
+    norm_lines = []
+    for row in norm_rows:
+        verdict = "согласуется" if row["normal_at_alpha"] else "не согласуется"
+        norm_lines.append(
+            f"  {row['variable']}: асимметрия={row['skew']:.3f}, эксцесс={row['kurtosis_excess']:.3f}, "
+            f"Жарк–Бера={row['jarque_bera']:.4g}, p={row['p_value']:.4g} → {verdict} с нормальным законом при α={ALPHA}"
+        )
 
     lines = [
         "П.1 Описание данных",
-        "Датасет: Apartment for Rent Classified (UCI #555).",
+        "Датасет: Apartment for Rent Classified (UCI #555), тот же массив, что в ЛР1.1.",
         f"n = {n}",
-        "Y (зависимая): price — арендная плата, USD/мес. (количественная непрерывная).",
-        "X: bedrooms (количественная), square_feet (количественная),",
-        "   pets_yes (фиктивная 0/1 из категориального pets_allowed).",
+        "Y (зависимая): price — арендная плата, USD/мес.",
+        "В файле цена целочисленная, по смыслу это стоимость аренды, а не число событий.",
+        "X: bedrooms — число спален (количественная дискретная);",
+        "    square_feet — площадь, кв. футы (количественная);",
+        "    pets_yes — фиктивная 0/1 из категориального pets_allowed",
+        "    (1 — можно с животными, 0 — нельзя).",
+        f"pets_yes = 0: {n_no} ({n_no / n:.1%}); pets_yes = 1: {n_yes} ({n_yes / n:.1%}).",
         "",
-        "П.2 Дескриптивный анализ / нормальность",
-        "По асимметрии, эксцессу и тестам (ЛР1.1) price, bedrooms, square_feet",
-        "не согласуются с нормальным законом (правосторонняя скошенность у price и square_feet).",
+        "П.2 Дескриптивный анализ и нормальность",
+        "H0 критерия Жарка–Бера: выборка взята из нормального распределения.",
+        *norm_lines,
+        "Вывод: price, bedrooms и square_feet не согласуются с нормальным распределением.",
+        "У price и square_feet правосторонняя скошенность и тяжёлый правый хвост.",
         "",
-        "П.3 Гистограммы (формула Стерджесса)",
+        "П.3 Гистограммы. Формула Стерджесса: k = round(1 + 3.322·lg n), h = (max − min) / k.",
+        f"  1 + 3.322·lg({n}) = {k_formula:.4f}, после округления k = {k_price}.",
+        f"  price: k={k_price}, h={h_price:.4f}",
+        f"  square_feet: k={k_sq}, h={h_sq:.4f}",
+        f"  bedrooms: формула даёт k={k_bed}, h={h_bed:.4f}.",
+        f"  Различных значений bedrooms — {n_bed} (от {bed_min:.0f} до {bed_max:.0f}).",
+        "  Дробный шаг разрезал бы целые числа спален, поэтому гистограмма построена",
+        f"  по целым значениям, число столбцов = {n_bed}.",
     ]
-    for col in ["price", "square_feet"]:
-        k, h = sturges_bins(df[col])
-        lines.append(f"  {col}: k={k}, ширина интервала h={h:.4f}")
-    k_bed = int(df["bedrooms"].nunique())
-    lines.append(f"  bedrooms: дискретные бины, k={k_bed}")
     (RES / "01_03_summary.txt").write_text("\n".join(lines), encoding="utf-8")
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
@@ -170,19 +222,33 @@ def plot_residuals(
     plt.close(fig)
 
     q = pd.qcut(y_hat, q=4, duplicates="drop")
-    mean_by_q = pd.Series(resid).groupby(q, observed=True).mean()
-    var_by_q = pd.Series(resid).groupby(q, observed=True).var(ddof=1)
+    grouped = pd.Series(resid).groupby(q, observed=True)
+    mean_by_q = grouped.mean()
+    var_by_q = grouped.var(ddof=1)
     var_ratio = float(var_by_q.max() / var_by_q.min()) if var_by_q.min() > 0 else np.nan
-    homo_ok = bool(var_ratio < 3) if np.isfinite(var_ratio) else False
+    resid_std = float(resid.std(ddof=1))
+    max_abs_qmean = float(np.max(np.abs(mean_by_q.to_numpy(dtype=float))))
+    # Общее среднее ≈ 0 даёт свободный член. Постоянство среднего — это сдвиг по уровням ŷ.
+    mean_stable = bool(resid_std > 0 and max_abs_qmean < 0.15 * resid_std)
+    quartile_lines = [
+        f"ŷ∈{interval}: mean(e)={mean_v:.2f}, var(e)={var_v:.1f}"
+        for interval, mean_v, var_v in zip(
+            mean_by_q.index,
+            mean_by_q.to_numpy(dtype=float),
+            var_by_q.to_numpy(dtype=float),
+        )
+    ]
 
     return {
         "resid_mean": float(resid.mean()),
-        "resid_std": float(resid.std(ddof=1)),
-        "mean_by_quartile": mean_by_q.to_dict(),
+        "resid_std": resid_std,
+        "mean_by_quartile": {str(k): float(v) for k, v in mean_by_q.items()},
         "var_by_quartile": {str(k): float(v) for k, v in var_by_q.items()},
+        "quartile_lines": quartile_lines,
+        "max_abs_quartile_mean": max_abs_qmean,
         "var_ratio_q": var_ratio,
-        "mean_approx_zero": bool(abs(resid.mean()) < max(1e-6, 0.01 * np.std(resid))),
-        "homoscedasticity_rough_ok": homo_ok,
+        "mean_approx_zero": bool(abs(resid.mean()) < max(1e-6, 0.01 * resid_std)),
+        "mean_stable_across_fitted": mean_stable,
         "std_resid_skew": float(pd.Series(std_resid).skew()),
         "std_resid_kurtosis": float(pd.Series(std_resid).kurtosis()),
     }
@@ -235,10 +301,12 @@ def evaluate_ols(model, y: np.ndarray, name: str, file_stem: str, formula_terms:
         quality_notes.append("R² умеренный.")
     else:
         quality_notes.append("R² высокий.")
-    if resid_info["mean_approx_zero"]:
-        quality_notes.append("Среднее остатков ≈ 0 (несмещённость в среднем выполняется).")
+    if resid_info["mean_stable_across_fitted"]:
+        quality_notes.append(
+            "Среднее остатков по квартилям ŷ сдвинуто мало относительно разброса."
+        )
     else:
-        quality_notes.append("Среднее остатков заметно отличается от 0.")
+        quality_notes.append("Среднее остатков заметно меняется по уровню ŷ.")
     if isinstance(bp, dict) and "p" in bp:
         if bp["homo_at_alpha"]:
             quality_notes.append(
@@ -269,6 +337,7 @@ def evaluate_ols(model, y: np.ndarray, name: str, file_stem: str, formula_terms:
         "breusch_pagan": bp,
         "quality_notes": quality_notes,
         "coefficients": coef_table.to_dict(orient="index"),
+        "stat_name": "F",
     }
 
     text_lines = [
@@ -285,6 +354,8 @@ def evaluate_ols(model, y: np.ndarray, name: str, file_stem: str, formula_terms:
         "Анализ остатков:",
         f"  mean(e)={resid_info['resid_mean']:.6g}",
         f"  std(e)={resid_info['resid_std']:.6g}",
+        f"  max |mean| по квартилям ŷ={resid_info['max_abs_quartile_mean']:.4f}",
+        *[f"  {line}" for line in resid_info["quartile_lines"]],
         f"  отношение дисперсий по квартилям ŷ: {resid_info['var_ratio_q']:.4f}",
         f"  Breusch–Pagan: {bp}",
         "",
@@ -314,17 +385,37 @@ def evaluate_glm_poisson(model, y: np.ndarray, name: str, file_stem: str, formul
 
     lr_stat = float(model.llr)
     lr_p = float(model.llr_pvalue)
-    model_sig = lr_p < ALPHA
+    pearson_chi2 = float(np.sum(resid**2))
+    df_resid = float(model.df_resid)
+    dispersion = pearson_chi2 / df_resid
+    se_scale = math.sqrt(dispersion)
+    # Обычный Пуассон предполагает φ = 1. Здесь φ >> 1, поэтому z и LR не используются.
+    se_quasi = model.bse * se_scale
+    z_quasi = model.params / se_quasi
+    p_quasi = pd.Series(
+        2 * stats.norm.sf(np.abs(np.asarray(z_quasi, dtype=float))),
+        index=model.params.index,
+    )
+    lr_quasi = lr_stat / dispersion
+    lr_quasi_p = float(stats.chi2.sf(lr_quasi, k))
+    model_sig = lr_quasi_p < ALPHA
 
     resid_info = plot_residuals(y_hat, raw_resid, std_resid, name, file_stem)
+
+    try:
+        bp_lm, bp_p, _, _ = het_breuschpagan(raw_resid, np.asarray(model.model.exog, dtype=float))
+        bp = {"lm": float(bp_lm), "p": float(bp_p), "homo_at_alpha": bool(bp_p >= ALPHA)}
+    except Exception as e:
+        bp = {"error": str(e)}
 
     coef_table = pd.DataFrame(
         {
             "coef": model.params,
-            "std_err": model.bse,
-            "z": model.tvalues,
-            "p": model.pvalues,
-            "significant": model.pvalues < ALPHA,
+            "std_err_poisson": model.bse,
+            "std_err_quasi": se_quasi,
+            "z_quasi": z_quasi,
+            "p": p_quasi,
+            "significant": p_quasi < ALPHA,
         }
     )
     coef_table.to_csv(RES / f"{file_stem}_coefficients.csv", encoding="utf-8-sig")
@@ -340,15 +431,33 @@ def evaluate_glm_poisson(model, y: np.ndarray, name: str, file_stem: str, formul
 
     quality_notes = [
         f"Псевдо-R² (McFadden)={pseudo_r2:.4f}; R² по дисперсии Y={r2_var:.4f}.",
+        (
+            f"Сверхдисперсия φ = χ² Пирсона / df = {dispersion:.2f} "
+            f"(у пуассоновской модели нужно φ ≈ 1). Значимость оценивается квази-LR и квази-z."
+        ),
     ]
-    if resid_info["mean_approx_zero"]:
-        quality_notes.append("Среднее сырых остатков близко к 0.")
+    if resid_info["mean_stable_across_fitted"]:
+        quality_notes.append(
+            "Среднее остатков по квартилям ŷ сдвинуто мало относительно разброса."
+        )
     else:
-        quality_notes.append("Среднее сырых остатков заметно ≠ 0.")
-    if resid_info["var_ratio_q"] and resid_info["var_ratio_q"] > 3:
-        quality_notes.append("Дисперсия остатков по квартилям ŷ сильно различается.")
-    else:
-        quality_notes.append("Разброс дисперсий остатков по квартилям умеренный.")
+        quality_notes.append("Среднее остатков заметно меняется по уровню ŷ.")
+    if isinstance(bp, dict) and "p" in bp:
+        if bp["homo_at_alpha"]:
+            quality_notes.append(
+                f"Breusch–Pagan p={bp['p']:.4g}: постоянство дисперсии сырых остатков не отвергается."
+            )
+        else:
+            quality_notes.append(
+                f"Breusch–Pagan p={bp['p']:.4g}: дисперсия сырых остатков не постоянна."
+            )
+
+    inference_note = (
+        f"Оценки коэффициентов — пуассоновский ММП. "
+        f"φ = {dispersion:.2f}, √φ = {se_scale:.2f}: стандартные ошибки умножены на √φ. "
+        f"Обычный LR = {lr_stat:.1f} (p={lr_p:.3g}) предполагает Var(Y)=μ и в вывод о значимости не входит. "
+        f"Используется квази-LR = LR/φ = {lr_quasi:.2f}, p={lr_quasi_p:.3g}."
+    )
 
     summary = {
         "name": name,
@@ -357,16 +466,21 @@ def evaluate_glm_poisson(model, y: np.ndarray, name: str, file_stem: str, formul
         "r2": r2_var,
         "r2_adj": r2_adj,
         "pseudo_r2_mcfadden": pseudo_r2,
-        "f_stat": lr_stat,
-        "f_pvalue": lr_p,
+        "f_stat": lr_quasi,
+        "f_pvalue": lr_quasi_p,
         "model_significant": model_sig,
         "rmse": float(np.sqrt(np.mean(raw_resid**2))),
         "equation": equation,
         "resid_info": resid_info,
         "quality_notes": quality_notes,
         "coefficients": coef_table.to_dict(orient="index"),
-        "pearson_chi2": float(np.sum(resid**2)),
-        "breusch_pagan": {},
+        "pearson_chi2": pearson_chi2,
+        "dispersion": dispersion,
+        "lr_poisson": lr_stat,
+        "lr_poisson_p": lr_p,
+        "breusch_pagan": bp,
+        "stat_name": "квази-LR (LR/φ)",
+        "inference_note": inference_note,
     }
 
     text_lines = [
@@ -374,15 +488,21 @@ def evaluate_glm_poisson(model, y: np.ndarray, name: str, file_stem: str, formul
         f"Уравнение: {equation}",
         f"n={n}, k={k}",
         f"R²(var)={r2_var:.6f}, R²_adj={r2_adj:.6f}, pseudo-R²(McFadden)={pseudo_r2:.6f}",
-        f"LR={lr_stat:.4f}, p={lr_p:.6g}, значимо: {model_sig}",
+        f"φ={dispersion:.4f}, квази-LR={lr_quasi:.4f}, p={lr_quasi_p:.6g}, значимо: {model_sig}",
+        f"LR Пуассона (не используется)={lr_stat:.4f}, p={lr_p:.6g}",
         f"RMSE={summary['rmse']:.4f}",
         "",
-        "Коэффициенты (log-link):",
+        "Коэффициенты (log-link, p — квазипуассоновские):",
         coef_table.to_string(),
+        "",
+        inference_note,
         "",
         "Анализ остатков:",
         f"  mean(y-μ)={resid_info['resid_mean']:.6g}",
+        f"  max |mean| по квартилям ŷ={resid_info['max_abs_quartile_mean']:.4f}",
+        *[f"  {line}" for line in resid_info["quartile_lines"]],
         f"  var_ratio_q={resid_info['var_ratio_q']:.4f}",
+        f"  Breusch–Pagan: {bp}",
         "",
         "Оценка качества:",
         *[f"  - {q}" for q in quality_notes],
@@ -437,29 +557,42 @@ def write_points_6_10_justification(summary: dict, stem: str, model_kind: str) -
         r2_verdict = f"R²={r2:.4f} — высокое качество аппроксимации."
         quality_total = "качество высокое по R²"
 
-    mean_ok = ri["mean_approx_zero"]
+    mean_stable = ri["mean_stable_across_fitted"]
     var_ratio = ri["var_ratio_q"]
     skew = ri["std_resid_skew"]
-    homo_ok = isinstance(bp, dict) and bp.get("homo_at_alpha", False)
-    if not bp:
-        homo_ok = var_ratio < 3
+    if isinstance(bp, dict) and "p" in bp:
+        homo_ok = bool(bp["homo_at_alpha"])
+        homo_word = "не отвергается" if homo_ok else "отвергается"
+    else:
+        homo_ok = False
+        homo_word = "не проверена"
+    q_lines = "\n".join(f"  {line}" for line in ri["quartile_lines"])
+    max_abs = ri["max_abs_quartile_mean"]
+    std_e = ri["resid_std"]
+    mean_ratio = max_abs / std_e if std_e else np.nan
+    inference = summary.get("inference_note", "")
+    inference_block = f"- {inference}\n" if inference else ""
+    stat_name = summary.get("stat_name", "статистика")
 
     text = f"""Обоснование п.6–10 для модели: {summary['name']} ({model_kind})
 
 П.6. График остатков. Постоянство среднего и дисперсии
 - График: figures/{stem}_residuals.png (левая панель: остатки e против предсказанных ŷ).
-- Среднее остатков mean(e) = {ri['resid_mean']:.6g}.
-  Критерий: |mean(e)| мал относительно разброса остатков →
-  постоянство среднего в среднем {'выполняется' if mean_ok else 'НЕ выполняется'}.
-- Отношение max/min дисперсий остатков по квартилям ŷ = {var_ratio:.4f}.
-  Эвристика: отношение < 3 считается умеренным разбросом.
-  Вывод по квартилям: {'разброс умеренный' if var_ratio < 3 else 'дисперсия заметно меняется по уровню ŷ'}.
+- Общее среднее остатков mean(e) = {ri['resid_mean']:.6g}.
+  У модели со свободным членом оно близко к нулю по построению.
+  Постоянство среднего проверяется по уровням ŷ, а не по этому числу.
+- Среднее и дисперсия остатков по квартилям ŷ:
+{q_lines}
+- Наибольший |mean(e)| по квартилям = {max_abs:.2f} при sd(e) = {std_e:.2f}
+  (отношение {mean_ratio:.3f}). Критерий: отношение < 0.15 — сдвиг мал на фоне разброса.
+  Вывод по среднему: {'среднее остатков по уровню ŷ примерно постоянно' if mean_stable else 'среднее остатков меняется по уровню ŷ'}.
+- Отношение max/min дисперсий по квартилям ŷ = {var_ratio:.4f}.
 {bp_line}
 П.7. Гистограмма стандартизированных остатков
 - Файл: figures/{stem}_residuals.png (правая панель).
 - Асимметрия станд. остатков = {skew:.4f}; эксцесс = {ri['std_resid_kurtosis']:.4f}.
 - Критерий близости к N(0,1): |асимметрия| < 0.5 и визуальное совпадение с кривой плотности.
-  Вывод: {'форма близка к симметричной' if abs(skew) < 0.5 else 'распределение остатков скошено; нормальность остатков под вопросом'}.
+  Вывод: {'форма близка к симметричной' if abs(skew) < 0.5 else 'распределение остатков скошено; нормальность остатков не выполняется'}.
 
 П.8. Уравнение регрессии
 {summary['equation']}
@@ -467,20 +600,20 @@ def write_points_6_10_justification(summary: dict, stem: str, model_kind: str) -
 П.9. Оценка качества (R², график и гистограмма остатков)
 - R² = {summary['r2']:.6f}; R²_adj = {summary['r2_adj']:.6f}; RMSE = {summary['rmse']:.4f}.
 - {r2_verdict}
-- По графику остатков: среднее ≈ 0 — {'да' if mean_ok else 'нет'}; гомоскедастичность — см. п.6.
+- По графику остатков: среднее по уровням ŷ примерно постоянно — {'да' if mean_stable else 'нет'}; постоянство дисперсии — см. п.6.
 - По гистограмме: см. п.7 (асимметрия={skew:.2f}).
 - Итог по качеству: {quality_total}.
 
 П.10. Значимость модели и коэффициентов
 - Критерий значимости уравнения: p-value теста модели < α={ALPHA}.
-- Статистика модели = {summary['f_stat']:.4f}, p = {summary['f_pvalue']:.6g} →
+{inference_block}- {stat_name} = {summary['f_stat']:.4f}, p = {summary['f_pvalue']:.6g} →
   модель {'значима' if summary['model_significant'] else 'НЕ значима'} при α={ALPHA}.
 - Значимость коэффициентов (H0: βj=0), α={ALPHA}:
 """ + "\n".join(_coef_sig_lines(summary)) + f"""
 
 Вывод по п.6–10: уравнение {'статистически значимо' if summary['model_significant'] else 'незначимо'};
 качество по R² {'низкое' if r2 < 0.3 else 'умеренное/высокое'}; остатки —
-mean≈0 {'да' if mean_ok else 'нет'}, гомоскедастичность {'не отвергается' if homo_ok else 'отвергается / под вопросом'}.
+среднее по уровням ŷ {'примерно постоянно' if mean_stable else 'не постоянно'}, гомоскедастичность {homo_word}.
 """
     (RES / f"{stem}_justification_6_10.txt").write_text(text, encoding="utf-8")
     return text
@@ -624,15 +757,19 @@ def point_11_poisson(df: pd.DataFrame, linear: dict) -> dict:
 | R² (доля объяснённой дисперсии Y) | {linear['r2']:.6f} | {summary['r2']:.6f} | {better_r2} |
 | R²_adj | {linear['r2_adj']:.6f} | {summary['r2_adj']:.6f} | {better_r2adj} |
 | RMSE (меньше — лучше) | {linear['rmse']:.4f} | {summary['rmse']:.4f} | {better_rmse} |
-| Значимость модели (α={ALPHA}) | {linear['model_significant']} (F, p={linear['f_pvalue']:.3g}) | {summary['model_significant']} (LR, p={summary['f_pvalue']:.3g}) | обе значимы |
+| Значимость модели (α={ALPHA}) | {linear['model_significant']} (F, p={linear['f_pvalue']:.3g}) | {summary['model_significant']} (квази-LR, p={summary['f_pvalue']:.3g}) | обе значимы |
+| φ = χ² Пирсона / df (только пуассон) | — | {summary['dispersion']:.2f} | — |
 | Pseudo-R² McFadden (только пуассон) | — | {summary.get('pseudo_r2_mcfadden', float('nan')):.6f} | — |
 
 Обоснование вывода после п.11:
-1) По типу Y (п.4) линейная модель уместнее: price непрерывна, а не счётная.
+1) По типу Y (п.4) линейная модель уместнее: price — арендная плата, а не число событий.
 2) По качеству аппроксимации: R² линейной ({linear['r2']:.4f}) {'>' if linear['r2'] > summary['r2'] else '≤'} R²(var) пуассона ({summary['r2']:.4f}).
 3) По ошибке прогноза: RMSE линейной ({linear['rmse']:.2f}) {'<' if linear['rmse'] < summary['rmse'] else '≥'} RMSE пуассона ({summary['rmse']:.2f}).
-4) Обе модели статистически значимы — отличие не в значимости, а в качестве и спецификации.
-5) Итог: подтверждается выбор п.4 — линейная предпочтительнее пуассоновской по R² и RMSE.
+4) Линейная модель значима по F. Пуассоновская значима по квази-LR = LR/φ.
+   φ = {summary['dispersion']:.2f} при требуемом для Пуассона φ ≈ 1, поэтому обычные z и LR
+   (LR = {summary['lr_poisson']:.1f}) в оценку значимости не входят.
+5) Дисперсия сырых остатков пуассоновской модели не постоянна: Breusch–Pagan p={summary['breusch_pagan'].get('p', float('nan')):.3g}.
+6) Итог: выбор п.4 подтверждается. Линейная модель лучше по типу Y, по R² и по RMSE.
 """
     (RES / "11_vs_linear.txt").write_text(cmp_text, encoding="utf-8")
     summary["vs_linear"] = cmp_text
@@ -691,12 +828,29 @@ def point_12_nonlinear(df: pd.DataFrame, linear: dict) -> dict:
     X = sm.add_constant(design)
     terms = list(design.columns)
     model = sm.OLS(y, X).fit()
+    exog = np.asarray(X, dtype=float)
+    vif = {
+        name: float(variance_inflation_factor(exog, i))
+        for i, name in enumerate(X.columns)
+        if name != "const"
+    }
+    cond = float(model.condition_number)
+    vif_txt = ", ".join(f"{name}={value:.1f}" for name, value in vif.items())
+    pd.Series(vif, name="VIF").to_csv(RES / "12_nonlinear_vif.csv", encoding="utf-8-sig")
     summary = evaluate_ols(
         model,
         y.to_numpy(),
         "Нелинейная регрессия (МНК) + фиктивная",
         "12_nonlinear",
         terms,
+    )
+    summary["vif"] = vif
+    summary["condition_number"] = cond
+    summary["inference_note"] = (
+        f"Число обусловленности = {cond:.4g}. VIF: {vif_txt}. "
+        "Столбцы square_feet, square_feet² и square_feet²·log почти линейно зависимы. "
+        "t-критерии формально отклоняют нулевые коэффициенты этих членов, "
+        "но их знаки по отдельности не интерпретируются. Вклад формы виден по приросту R²."
     )
     summary["justification_6_10"] = write_points_6_10_justification(
         summary, "12_nonlinear", "нелинейная МНК"
@@ -722,14 +876,16 @@ def point_12_nonlinear(df: pd.DataFrame, linear: dict) -> dict:
 | Значимость модели | {linear['model_significant']} | {summary['model_significant']} | — |
 
 Обоснование:
-1) Нелинейные члены (square_feet_sq, square_feet_sq_log) статистически значимы
-   (см. коэффициенты) — кривизна связи цена–площадь формально есть.
+1) Число обусловленности = {cond:.4g}. VIF: {vif_txt}.
+   Квадрат площади и square_feet²·log имеют VIF в тысячи: члены описывают одну и ту же
+   кривизну и по отдельности не читаются. Формула в задании (x³ и x²·log x) — пример
+   линейной свёртки; здесь свёртка x, x² и x²·log x.
 2) Прирост качества: ΔR²_adj = {d_r2adj:+.6f}
    {'≥ 0.01 → гибкая форма даёт заметный выигрыш' if worth else '< 0.01 → прирост практически пренебрежим'}.
-3) RMSE изменился на {d_rmse:.4f} USD при среднем price ≈ {float(df['price'].mean()):.0f} —
-   практически незаметно.
-4) Итог п.12: нелинейная модель чуть лучше по R²/RMSE, но для интерпретации
-   достаточно линейной модели п.5; усложнение формы не окупается.
+3) RMSE изменился на {d_rmse:.4f} USD при среднем price ≈ {float(df['price'].mean()):.0f}.
+4) Итог п.12: уравнение значимо, как и линейное. Прирост качества пренебрежим,
+   коэффициенты нелинейных членов площади не интерпретируются.
+   Для содержательного вывода достаточно линейной модели п.5.
 """
     (RES / "12_vs_linear.txt").write_text(cmp_text, encoding="utf-8")
     summary["vs_linear"] = cmp_text
@@ -768,6 +924,22 @@ def point_12_nonlinear(df: pd.DataFrame, linear: dict) -> dict:
 # Итоговый отчёт (по порядку пунктов, без смешения)
 # ---------------------------------------------------------------------------
 
+def _md_table(frame: pd.DataFrame, index_name: str = "") -> str:
+    columns = [index_name] + [str(col) for col in frame.columns]
+    header = "| " + " | ".join(columns) + " |"
+    sep = "|" + "|".join(["---"] * len(columns)) + "|"
+    lines = [header, sep]
+    for idx, row in frame.iterrows():
+        cells = [str(idx)]
+        for value in row:
+            if isinstance(value, (float, np.floating)):
+                cells.append(f"{float(value):.6g}")
+            else:
+                cells.append(str(value))
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame) -> None:
     print("\n=== Итоговый отчёт ===")
 
@@ -794,17 +966,51 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
     cmp.to_csv(RES / "13_model_comparison.csv", index=False, encoding="utf-8-sig")
 
     best_name = cmp.loc[cmp["R2"].idxmax(), "модель"]
-    interp = f"""Итоговое сравнение (после выполнения всех пунктов 4–12)
+    c = linear["coefficients"]
+    corr_bed = float(df["price"].corr(df["bedrooms"]))
+    corr_sq = float(df["price"].corr(df["square_feet"]))
+    corr_bed_sq = float(df["bedrooms"].corr(df["square_feet"]))
+    bed_means = df.groupby("bedrooms")["price"].agg(["count", "mean"])
+    bed_lines = "\n".join(
+        f"  {int(idx)} спален: n={int(row['count'])}, средняя плата = {row['mean']:.1f} USD"
+        for idx, row in bed_means.iterrows()
+        if float(idx) <= 4
+    )
+    vif_txt = ", ".join(f"{name}={value:.1f}" for name, value in nonlinear["vif"].items())
+    interp = f"""Итоговое сравнение и интерпретация
 
-Порядок по заданию соблюдён:
-- п.4: выбор только между линейной и пуассоновской → выбрана линейная (по типу Y);
-- п.5–10: построена линейная с фиктивной pets_yes;
-- п.11: построена пуассоновская и сравнена с линейной → линейная лучше по R² и RMSE;
-- п.12: впервые появляется нелинейная; сравнена с линейной → прирост R²_adj пренебрежим.
+Порядок по заданию:
+- п.4: между линейной и пуассоновской выбрана линейная, потому что Y — арендная плата;
+- п.5–10: линейная модель с фиктивной pets_yes;
+- п.11: пуассоновская; по R² и RMSE она хуже линейной;
+- п.12: нелинейная свёртка. Наибольший R² у модели «{best_name}»,
+  прирост R²_adj к линейной пренебрежим, столбцы площади почти коллинеарны.
 
-По R² среди всех построенных моделей лучшая: {best_name}.
-При этом выбор п.4 (линейная) остаётся обоснованным: нелинейная даёт ничтожный прирост,
-а пуассон хуже по R²/RMSE и менее уместен по типу Y.
+Интерпретация линейного уравнения (п.5), при прочих включённых признаках:
+- свободный член {c['const']['coef']:.2f} — уровень уравнения при нулевых X.
+  Площадь в данных не бывает нулевой, поэтому свободный член не является ценой реальной квартиры.
+- square_feet: {c['square_feet']['coef']:.3f} USD за квадратный фут.
+  Парная корреляция цены и площади = {corr_sq:.3f}.
+- bedrooms: {c['bedrooms']['coef']:.2f} USD за дополнительную спальню при фиксированной площади.
+  Парная корреляция цены и числа спален положительная ({corr_bed:.3f}):
+  в среднем квартира с большим числом спален дороже, потому что она больше
+  (корреляция bedrooms и square_feet = {corr_bed_sq:.3f}).
+  Минус в уравнении — частный эффект при той же площади: комнаты оказываются меньше.
+- pets_yes: {c['pets_yes']['coef']:.2f} USD, если животные разрешены.
+  Это связь в объявлениях, а не эффект «животные снижают цену».
+
+Средняя плата по числу спален (без учёта площади):
+{bed_lines}
+
+Пуассоновская модель: φ = {poisson['dispersion']:.2f}. Значимость взята по квази-LR.
+Дисперсия её сырых остатков не постоянна.
+
+Нелинейная модель: число обусловленности = {nonlinear['condition_number']:.4g}, VIF: {vif_txt}.
+Коэффициенты square_feet, square_feet² и square_feet²·log по отдельности не интерпретируются.
+
+Общий вывод: все три уравнения статистически значимы при n = {len(df)}.
+R² около 0,15: выбранные признаки оставляют необъяснённой большую часть разброса цены.
+Рабочая модель — линейная из п.5.
 
 Данные: n={len(df)}, Y=price, X=bedrooms, square_feet, pets_yes.
 """
@@ -821,7 +1027,25 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
     fig.savefig(FIG / "13_model_comparison.png")
     plt.close(fig)
 
-    report = f"""# Отчёт. Лабораторная работа №1.2
+    desc = pd.read_csv(RES / "01_03_descriptive.csv", index_col=0)
+    norm = pd.read_csv(RES / "01_03_normality.csv")
+    pets = pd.read_csv(RES / "01_03_pets.csv")
+    desc_md = _md_table(desc, index_name="переменная")
+    norm_md = _md_table(norm.set_index("variable"), index_name="переменная")
+    pets_md = _md_table(pets.set_index("pets_yes"), index_name="pets_yes")
+    summary_13 = open(RES / "01_03_summary.txt", encoding="utf-8").read()
+
+    report = f"""# Титульный лист
+
+**Лабораторная работа №1.2. Регрессионный анализ**
+
+Студент: ________________  
+Группа: ________________  
+Преподаватель: ________________  
+
+---
+
+# Отчёт. Лабораторная работа №1.2
 ## Регрессионный анализ
 
 ### Цель работы
@@ -830,20 +1054,32 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
 ---
 
 ### П.1. Описание исходных данных
-- **Датасет:** Apartment for Rent Classified (UCI #555), тот же, что в ЛР1.1.
-- **n = {len(df):,}** (после очистки в ЛР1.1).
-- **Y:** `price` — арендная плата, USD/мес. (количественная непрерывная).
-- **X:** `bedrooms` (количественная), `square_feet` (количественная),
-  фиктивная `pets_yes` (1 = можно с животными, 0 = нельзя).
 
-Подробности: `results/01_03_summary.txt`.
+{summary_13}
 
 ---
 
-### П.2–3. Дескриптивный анализ и гистограммы
-См. `results/01_03_descriptive.csv`, `figures/03_histograms.png`.
-Переменные не согласуются с нормальным распределением (как в ЛР1.1).
-Число интервалов гистограмм — по формуле Стерджесса.
+### П.2. Результаты дескриптивного анализа
+
+{desc_md}
+
+Частоты фиктивной переменной:
+
+{pets_md}
+
+Согласованность с нормальным распределением, критерий Жарка–Бера (H0: нормальность, α = 0,05):
+
+{norm_md}
+
+Вывод: `price`, `bedrooms` и `square_feet` не согласуются с нормальным распределением. У цены и площади распределение скошено вправо.
+
+---
+
+### П.3. Гистограммы
+
+Число и ширина интервалов — по формуле Стерджесса, см. блок пункта 1 выше. Для `bedrooms` формула даёт дробный шаг, гистограмма построена по целым значениям.
+
+![Гистограммы выбранных атрибутов](figures/03_histograms.png)
 
 ---
 
@@ -865,8 +1101,9 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
 | Модель значима (α=0.05) | {linear['model_significant']} |
 | RMSE | {linear['rmse']:.2f} |
 
-- График и гистограмма остатков: `figures/05_linear_residuals.png`
-- Коэффициенты: `results/05_linear_coefficients.csv`
+![Остатки линейной модели](figures/05_linear_residuals.png)
+
+Коэффициенты: `results/05_linear_coefficients.csv`.
 
 #### Обоснование п.6–10 (линейная)
 
@@ -885,12 +1122,15 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
 | R² (по дисперсии Y) | {poisson['r2']:.4f} |
 | R²_adj | {poisson['r2_adj']:.4f} |
 | McFadden pseudo-R² | {poisson.get('pseudo_r2_mcfadden', float('nan')):.4f} |
-| LR (p-value) | {poisson['f_stat']:.2f} ({poisson['f_pvalue']:.3g}) |
-| Модель значима | {poisson['model_significant']} |
+| φ (χ² Пирсона / df) | {poisson['dispersion']:.2f} |
+| Квази-LR (p-value) | {poisson['f_stat']:.2f} ({poisson['f_pvalue']:.3g}) |
+| LR Пуассона при φ=1 (не используется) | {poisson['lr_poisson']:.2f} |
+| Модель значима по квази-LR | {poisson['model_significant']} |
 | RMSE | {poisson['rmse']:.2f} |
 
-- Остатки: `figures/11_poisson_residuals.png`
-- Сравнение только с линейной: `figures/11_linear_vs_poisson.png`
+![Остатки пуассоновской модели](figures/11_poisson_residuals.png)
+
+![Сравнение линейной и пуассоновской моделей](figures/11_linear_vs_poisson.png)
 
 #### Обоснование п.6–10 (пуассон)
 
@@ -921,9 +1161,11 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
 | F (p-value) | {nonlinear['f_stat']:.2f} ({nonlinear['f_pvalue']:.3g}) |
 | Модель значима | {nonlinear['model_significant']} |
 | RMSE | {nonlinear['rmse']:.2f} |
+| Число обусловленности | {nonlinear['condition_number']:.4g} |
 
-- Остатки: `figures/12_nonlinear_residuals.png`
-- Сравнение с линейной: `figures/12_linear_vs_nonlinear.png`
+![Остатки нелинейной модели](figures/12_nonlinear_residuals.png)
+
+![Сравнение линейной и нелинейной моделей](figures/12_linear_vs_nonlinear.png)
 
 #### Обоснование п.6–10 (нелинейная)
 
@@ -943,8 +1185,9 @@ def write_report(linear: dict, poisson: dict, nonlinear: dict, df: pd.DataFrame)
 
 {open(RES / '13_interpretation.txt', encoding='utf-8').read()}
 
-Сводная таблица: `results/13_model_comparison.csv`  
-Сводный график: `figures/13_model_comparison.png`
+Сводная таблица: `results/13_model_comparison.csv`.
+
+![Сравнение трёх моделей](figures/13_model_comparison.png)
 
 ### Как запустить
 ```bash
